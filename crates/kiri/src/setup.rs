@@ -989,6 +989,33 @@ mod tests {
         let _ = std::fs::remove_dir_all(&h);
     }
 
+    // #250, as Nix home-manager sets a Mac up: a profile Kiri can read but
+    // not write (a link into a read-only store) is passed over, whether or
+    // not Kiri's line is in it already, and the other profiles get the line.
+    #[test]
+    fn a_read_only_profile_does_not_stop_setup() {
+        use std::os::unix::fs::PermissionsExt;
+        let with_line = format!("# managed elsewhere\n\n{}\n{}\n", super::PROFILE_MARK, super::SH_LINE);
+        for (round, text) in ["# managed elsewhere\n", with_line.as_str()].into_iter().enumerate() {
+            let h = scratch(&format!("readonly{round}"));
+            let managed = h.join("store/zshrc");
+            std::fs::create_dir_all(h.join("store")).unwrap();
+            std::fs::write(&managed, text).unwrap();
+            std::fs::set_permissions(&managed, std::fs::Permissions::from_mode(0o444)).unwrap();
+            // root writes through the mode: nothing read-only to try then.
+            if std::fs::OpenOptions::new().append(true).open(&managed).is_ok() {
+                let _ = std::fs::remove_dir_all(&h);
+                return;
+            }
+            std::os::unix::fs::symlink(&managed, h.join(".zshrc")).unwrap();
+            super::shell_path(&h, &h).unwrap();
+            assert_eq!(std::fs::read_to_string(&managed).unwrap(), text, "the read-only profile is as it was");
+            assert!(std::fs::read_link(h.join(".zshrc")).is_ok(), "the user's link stays a link");
+            assert!(std::fs::read_to_string(h.join(".zprofile")).unwrap().contains(super::PROFILE_MARK), "the other profiles still get the line");
+            let _ = std::fs::remove_dir_all(&h);
+        }
+    }
+
     // A profile Kiri can't read as text is left exactly as it was, never
     // replaced by Kiri's lines alone.
     #[test]
